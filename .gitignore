@@ -1,0 +1,7 @@
+.idea/
+data/
+docs/
+images/
+utils/__pycache__/
+results/
+*.txt
