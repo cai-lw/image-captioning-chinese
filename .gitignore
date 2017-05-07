@@ -4,4 +4,7 @@ docs/
 images/
 utils/__pycache__/
 results/
+meteor-1.5/
 *.txt
+logs/
+tasks.bat

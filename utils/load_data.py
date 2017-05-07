@@ -4,7 +4,7 @@ def load_img(path):
     with h5py.File(path, 'r') as f:
         return f['train_set'][()], f['validation_set'][()], f['test_set'][()]
 
-def load_text_seg(path):
+def load_text(path):
     with open(path, 'r', encoding='utf-8-sig') as f:
         ids, sentences = [], []
         idx = 0

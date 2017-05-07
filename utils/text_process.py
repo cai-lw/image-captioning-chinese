@@ -2,13 +2,23 @@ import jieba
 from collections import Counter
 import numpy as np
 
-def encode_text(sentences, vocab=None, max_size=None):
+punctuations={'，', '、','。',','}
+
+def segmentation(sentence, ignore_non_chinese):
+    if ignore_non_chinese:
+        return [word for word in jieba.cut(sentence, HMM=False) if any('\u4e00' <= char <= '\u9fff' for char in word)]
+    else:
+        return [word for word in jieba.cut(sentence, HMM=False) if word not in punctuations]
+
+def encode_text(sentences, vocab=None, max_size=None, ignore_non_chinese=True, with_begin_end=True):
     no_vocab = vocab is None
     tokens = []
     for s in sentences:
-        words = [word for word in jieba.cut(s) if any('\u4e00' <= char <= '\u9fff' for char in word)]
-        # words = [char for char in s if '\u4e00' <= char <= '\u9fff']
-        tokens.append(['<BEG>'] + words + ['<END>'])
+        words = segmentation(s, ignore_non_chinese=ignore_non_chinese)
+        if with_begin_end:
+            tokens.append(['<BEG>'] + words + ['<END>'])
+        else:
+            tokens.append(words)
     if no_vocab:
         word_count = Counter(word for seq in tokens for word in seq)
         freq_list = sorted(word_count.items(), key=lambda p:p[1], reverse=True)
@@ -28,8 +38,8 @@ def encode_text(sentences, vocab=None, max_size=None):
     else:
         return ret
 
-def decode_text(seqs, vocab_inv):
-    return [''.join(vocab_inv.get(idx) for idx in s) for s in seqs]
+def decode_text(seqs, vocab_inv, sep=''):
+    return [sep.join(vocab_inv.get(idx) for idx in s) for s in seqs]
 
 def seq2array(seqs, dtype=np.int64):
     max_len = max(len(s) for s in seqs)

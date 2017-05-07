@@ -1,20 +1,45 @@
 from collections import Counter
 from math import log, sqrt, exp
+import subprocess as subp
 
-def bleu(cand, refs, n):
-    len_cand = len(cand) - n + 1
-    if len_cand <= 0:
-        return 0
-    cand_count = Counter(make_ngram(cand, n))
-    refs_count = [Counter(make_ngram(ref, n)) for ref in refs]
-    score = 0
-    for ngram, count in cand_count.items():
-        m_max = max(ref_count.get(ngram, 0) for ref_count in refs_count)
-        score += min(count, m_max) / len_cand
-    return score
+class BLEUCounter(object):
+
+    def __init__(self, max_n=4):
+        self.den = [0] * max_n
+        self.nom = [0] * max_n
+        self.cand_len_sum = 0
+        self.refs_len_sum = 0
+        self.max_n = max_n
+
+    def add(self, cand, refs):
+        self.cand_len_sum += len(cand)
+        len_closest = len(min(refs, key=lambda ref: abs(len(cand) - len(ref))))
+        self.refs_len_sum += len_closest
+        for n in range(1, self.max_n + 1):
+            len_cand = len(cand) - n + 1
+            if len_cand <= 0:
+                return 0
+            cand_count = Counter(make_ngram(cand, n))
+            refs_count = [Counter(make_ngram(ref, n)) for ref in refs]
+            for ngram, count in cand_count.items():
+                m_max = max(ref_count.get(ngram, 0) for ref_count in refs_count)
+                self.den[n - 1] += min(count, m_max)
+                self.nom[n - 1] += count
+
+    def get_bleu(self):
+        penalty = min(1, exp(1 - self.refs_len_sum / self.cand_len_sum))
+        bleu_log = []
+        for i in range(self.max_n):
+            bleu_log.append(log(self.den[i] / self.nom[i]))
+        bleu_overall = []
+        for i in range(self.max_n):
+            bleu_overall.append(penalty * exp(sum(bleu_log[:i + 1]) / (i + 1)))
+        return bleu_overall
+
 
 def make_ngram(seq, n):
     return [tuple(seq[i:i + n]) for i in range(len(seq) - n + 1)]
+
 
 def rouge_l(cand, refs):
     ref_lcs = [lcs(cand, ref) for ref in refs]
@@ -26,6 +51,7 @@ def rouge_l(cand, refs):
         return 0
     else:
         return (1 + beta ** 2) * recall * precision / (recall + beta ** 2 * precision)
+
 
 def lcs(a, b):
     dp = [0] * len(b)
@@ -43,6 +69,7 @@ def lcs(a, b):
         dp = dp_new
     return max(dp)
 
+
 def build_idf(doc_dict):
     doc_size = len(doc_dict)
     idf = {}
@@ -57,14 +84,17 @@ def build_idf(doc_dict):
         idf.update(idf_n)
     return idf
 
+
 def cider_g(seq, idf, n_img, n):
     ngram_count = Counter(make_ngram(seq, n))
     len_seq = len(seq) - n + 1
     return dict((ngram, f / len_seq * idf.get(ngram, log(n_img))) for ngram, f in ngram_count.items())
 
+
 def dict_min(d1, d2):
     all_keys = set(d1.keys()).intersection(d2.keys())
     return dict((k, min(d1[k], d2[k])) for k in all_keys)
+
 
 def dict_inner(d1, d2):
     return sum(v * d2.get(k, 0) for k, v in d1.items())
@@ -88,3 +118,9 @@ def cider_d_n(cand, refs, idf, n_img, n):
 
 def cider_d(cand, refs, idf, n_img):
     return sum(cider_d_n(cand, refs, idf, n_img, n) for n in range(1, 5)) / 4
+
+def meteor(cand_file, ref_file, n_ref=5, language='other'):
+    meteor_path = 'meteor-1.5/meteor-1.5.jar'
+    cmd = ['java', '-jar', '-Xmx1G', meteor_path, cand_file, ref_file, '-q', '-r', str(n_ref), '-l', language]
+    res = subp.run(cmd, stdout=subp.PIPE, stderr=subp.DEVNULL, check=True)
+    return float(res.stdout.strip())

@@ -1,48 +1,70 @@
 import tensorflow as tf
 import tensorlayer as tl
 import numpy as np
+from datetime import datetime
+import os
 
 from utils.load_data import *
 from utils.text_process import *
 from utils.metrics import *
 
-d_feature = 4096
+flags = tf.app.flags
+FLAGS = flags.FLAGS
+flags.DEFINE_integer('n_epoch', 10, 'Number of epoches to train')
+flags.DEFINE_integer('n_hidden', 512, 'Dimension of hidden states in LSTM')
+flags.DEFINE_integer('n_embed', 512, 'Dimension of word embedding vectors')
+flags.DEFINE_integer('k_beam', 3, 'Width of beam in beam search')
+flags.DEFINE_float('end_penalty', 0.0, 'Penalty of each timestep after <END> in beam search')
+flags.DEFINE_boolean('use_partial_val', False, 'Set this only when comparing results with validation set agreement')
+flags.DEFINE_boolean('print_val', True, 'Print generated captions for selected images of validation set in log')
+flags.DEFINE_boolean('output_test', False, 'Output generated captions for test set')
+flags.DEFINE_string('output_dir', datetime.now().strftime('%y%m%d%H%M'), 'Name of output directory')
 
-n_hidden = 512
-n_embed = 512
+d_feature = 4096
+n_epoch = FLAGS.n_epoch
+n_hidden = FLAGS.n_hidden
+n_embed = FLAGS.n_embed
 keep_prob = 0.5
-k_beam = 3
-use_full_val = True
+k_beam = FLAGS.k_beam
+end_penalty = FLAGS.end_penalty
+use_partial_val = FLAGS.use_partial_val
+print_val = FLAGS.print_val
+output_test = FLAGS.output_test
+output_dir = FLAGS.output_dir
+try:
+    os.mkdir(os.path.join('results', output_dir))
+except FileExistsError:
+    pass
 
 train_img, val_img, test_img = load_img('./data/image_vgg19_fc2_feature.h5')
 n_val = val_img.shape[0]
 n_test = test_img.shape[0]
-train_idx, train_sentences = load_text_seg('./data/train.txt')
+train_idx, train_sentences = load_text('./data/train.txt')
 train_dict = {}
 for idx, stc in zip(train_idx, train_sentences):
     train_dict.setdefault(idx, []).append(stc)
 for idx in train_dict.keys():
     if len(train_dict[idx]) < 5:
         orig = train_dict[idx][:]
+        shuffle_idx = np.random.permutation(len(orig))
         for i in range(5 - len(orig)):
-            train_dict[idx].append(orig[np.random.randint(len(orig))])
+            train_dict[idx].append(orig[shuffle_idx[i % len(orig)]])
 train_pairs = [(idx, stc) for idx, stcs in train_dict.items() for stc in stcs]
 train_idx = [idx for idx, stc in train_pairs]
 train_sentences = [stc for idx, stc in train_pairs]
 train_seq, vocab, vocab_inv = encode_text(train_sentences)
 
-val_idx, val_sentences = load_text_seg('./data/valid.txt')
-val_seq = encode_text(val_sentences, vocab)
-# val_seq = val_sentences
+val_idx, val_sentences = load_text('./data/valid.txt')
+val_seq = encode_text(val_sentences, vocab=vocab, ignore_non_chinese=False, with_begin_end=False)
 val_dict = {}
 val_test = {}
 for idx, seq in zip(val_idx, val_seq):
     if val_dict.get(idx) is None:
-        if use_full_val:
-            val_dict[idx] = [seq]
-        else:
+        if use_partial_val:
             val_test[idx] = seq
             val_dict[idx] = []
+        else:
+            val_dict[idx] = [seq]
     else:
         val_dict[idx].append(seq)
 for idx in val_dict.keys():
@@ -136,7 +158,7 @@ def generate_seq(batch_img, k_beam=1):
             if t > 0:
                 for j in range(k_beam):
                     if batch_res[i * k_beam + j, t - 1] == vocab['<END>']:
-                        step_loglike[i * k_beam + j, 0, 0] = -np.log(4)
+                        step_loglike[i * k_beam + j, 0, 0] = -end_penalty
                         step_loglike[i * k_beam + j, 0, 1:] = -np.inf
                         step_ind[i * k_beam + j, 0, 0] = vocab['<END>']
             cand_loglike = batch_loglike_sum[i * k_beam:(i + 1) * k_beam].reshape((-1, 1)) \
@@ -170,14 +192,13 @@ sess.run(tf.global_variables_initializer())
 
 batch_size = 20
 zero_state = np.zeros((batch_size, n_hidden), dtype=np.float32)
-max_epoch = 10
 batch_per_epoch = n_train // batch_size
 # batch_per_epoch = 100
 n_batch_val = n_val // batch_size
 n_batch_test = n_test // batch_size
 accum_loss = 0
 shuffle_idx = np.random.permutation(n_train)
-for i_epoch in range(max_epoch):
+for i_epoch in range(n_epoch):
     for i_batch in range(batch_per_epoch):
         batch_idx = shuffle_idx[i_batch * batch_size:(i_batch + 1) * batch_size]
         batch_img = train_more_img[batch_idx, :]
@@ -194,32 +215,38 @@ for i_epoch in range(max_epoch):
         _, batch_loss = sess.run([train_op, loss], feed_dict=feed_dict)
         accum_loss += batch_loss
         if (batch_per_epoch * i_epoch + i_batch + 1) % 100 == 0:
-            print('[TRAIN]', 'E=%d/%d'%(i_epoch+1, max_epoch), 'B=%d/%d'%(i_batch+1, batch_per_epoch), 'loss=%f'%(accum_loss/100))
+            print('[TRAIN]', 'E=%d/%d'%(i_epoch+1, n_epoch), 'B=%d/%d'%(i_batch+1, batch_per_epoch), 'loss=%f'%(accum_loss/100))
             accum_loss = 0
 
-    bleu_sum = [0] * 4
+    bleu_counter = BLEUCounter()
     rouge_l_sum = 0
     cider_d_sum = 0
-    for i_batch in range(n_batch_val):
-        batch_img = val_img[i_batch * batch_size:(i_batch + 1) * batch_size]
-        seqs, texts = generate_seq(batch_img, k_beam=k_beam)
-        for i, seq in enumerate(seqs):
-            idx = i_batch * batch_size + i + 8001
-            if idx % 20 == 3:
-                print('[ VAL ]', idx, texts[i])
-            for n in range(1, 5):
-                bleu_sum[n - 1] += bleu(seq, val_dict[idx], n)
-            rouge_l_sum += rouge_l(seq, val_dict[idx])
-            cider_d_sum += cider_d(seq, val_dict[idx], idf, n_val)
-    print('[ VAL ]', 'EPOCH %d/%d'%(i_epoch+1, max_epoch))
+    val_file_path = os.path.join('results', output_dir, 'val_meteor_E%02d.txt'%(i_epoch + 1))
+    with open(val_file_path, 'w', encoding='utf8') as f:
+        for i_batch in range(n_batch_val):
+            batch_img = val_img[i_batch * batch_size:(i_batch + 1) * batch_size]
+            seqs, texts = generate_seq(batch_img, k_beam=k_beam)
+            text_seged = decode_text(seqs, vocab_inv, sep=' ')
+            for i, seq in enumerate(seqs):
+                idx = i_batch * batch_size + i + 8001
+                print(text_seged[i], file=f)
+                if idx % 20 == 3 and print_val:
+                    print('[ VAL ]', idx, texts[i])
+                bleu_counter.add(seq, val_dict[idx])
+                rouge_l_sum += rouge_l(seq, val_dict[idx])
+                cider_d_sum += cider_d(seq, val_dict[idx], idf, n_val)
+    print('[ VAL ]', 'EPOCH %d/%d'%(i_epoch+1, n_epoch))
+    bleus = bleu_counter.get_bleu()
     for n in range(1, 5):
-        print('[ VAL ]', 'BLEU-%d=%f'%(n, bleu_sum[n - 1] / n_val))
+        print('[ VAL ]', 'BLEU-%d=%f'%(n, bleus[n - 1]))
+    print('[ VAL ]', 'METEOR=%f'%meteor(val_file_path, 'data/valid_meteor.txt'))
     print('[ VAL ]', 'ROUGE-L=%f'%(rouge_l_sum / n_val))
     print('[ VAL ]', 'CIDEr-D=%f'%(cider_d_sum / n_val))
 
-    with open('./results/epoch-%d.txt'%(i_epoch + 1), 'w') as f:
-        for i_batch in range(n_batch_test):
-            batch_img = test_img[i_batch * batch_size:(i_batch + 1) * batch_size]
-            _, texts = generate_seq(batch_img, k_beam=k_beam)
-            for s in texts:
-                print(s, file=f)
+    if output_test:
+        with open(os.path.join('results', output_dir, 'test_E%02d.txt'%(i_epoch + 1)), 'w', encoding='utf8') as f:
+            for i_batch in range(n_batch_test):
+                batch_img = test_img[i_batch * batch_size:(i_batch + 1) * batch_size]
+                _, texts = generate_seq(batch_img, k_beam=k_beam)
+                for s in texts:
+                    print(s, file=f)
