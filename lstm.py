@@ -14,10 +14,10 @@ flags.DEFINE_integer('n_epoch', 10, 'Number of epoches to train')
 flags.DEFINE_integer('n_hidden', 512, 'Dimension of hidden states in LSTM')
 flags.DEFINE_integer('n_embed', 512, 'Dimension of word embedding vectors')
 flags.DEFINE_integer('k_beam', 3, 'Width of beam in beam search')
-flags.DEFINE_float('end_penalty', 0.0, 'Penalty of each timestep after <END> in beam search')
+flags.DEFINE_float('end_penalty', 1.0, 'Penalty of each timestep after <END> in beam search')
 flags.DEFINE_boolean('use_partial_val', False, 'Set this only when comparing results with validation set agreement')
 flags.DEFINE_boolean('print_val', True, 'Print generated captions for selected images of validation set in log')
-flags.DEFINE_boolean('output_test', False, 'Output generated captions for test set')
+flags.DEFINE_boolean('output_test', True, 'Output generated captions for test set')
 flags.DEFINE_string('output_dir', datetime.now().strftime('%y%m%d%H%M'), 'Name of output directory')
 
 d_feature = 4096
@@ -50,7 +50,7 @@ for idx in train_dict.keys():
         for i in range(5 - len(orig)):
             train_dict[idx].append(orig[shuffle_idx[i % len(orig)]])
 train_pairs = [(idx, stc) for idx, stcs in train_dict.items() for stc in stcs]
-train_idx = [idx for idx, stc in train_pairs]
+train_idx = np.array([idx for idx, stc in train_pairs])
 train_sentences = [stc for idx, stc in train_pairs]
 train_seq, vocab, vocab_inv = encode_text(train_sentences)
 
@@ -73,21 +73,17 @@ for idx in val_dict.keys():
 
 idf = build_idf(val_dict)
 
-
 train_seq, train_len = seq2array(train_seq)
 max_step = train_seq.shape[1]
 n_train = len(train_idx)
-train_more_img = np.zeros((n_train, d_feature), dtype=np.float32)
-for i in range(len(train_idx)):
-    train_more_img[i, :] = train_img[train_idx[i] - 1, :]
 
 sess = tf.InteractiveSession()
 
 img = tf.placeholder(tf.float32, shape=[None, d_feature], name='img')
-seq_in = tf.placeholder(tf.int64, shape=[None, max_step - 1], name='seq_in')
+seq_in = tf.placeholder(tf.int64, shape=[None, None], name='seq_in')
 seq_len = tf.placeholder(tf.int64, shape=[None], name='seq_len')
-seq_mask = tf.placeholder(tf.float32, shape=[None, max_step - 1], name='seq_mask')
-seq_truth = tf.placeholder(tf.int64, shape=[None, max_step - 1], name='seq_truth')
+seq_max_len = tf.shape(seq_in)[1]
+seq_truth = tf.placeholder(tf.int64, shape=[None, None], name='seq_truth')
 
 init_net = tl.layers.InputLayer(inputs=img)
 init_net = tl.layers.DenseLayer(init_net,
@@ -108,19 +104,20 @@ network = tl.layers.DynamicRNNLayer(network,
     n_hidden=n_hidden,
     sequence_length=seq_len,
     initial_state=tf.contrib.rnn.LSTMStateTuple(init_state_c, init_state_h),
-    return_seq_2d=True,
     name='lstm')
 state_outputs = network.final_state
 network = tl.layers.DropoutLayer(network, keep=keep_prob, name='lstm_out_dropout')
+network = tl.layers.ReshapeLayer(network, shape=[-1, n_hidden], name='lstm_out_reshape')
 network = tl.layers.DenseLayer(network,
     n_units=len(vocab),
     act=tf.identity,
     name='unembedding')
-network = tl.layers.ReshapeLayer(network, shape=[-1, max_step - 1, len(vocab)])
+network = tl.layers.ReshapeLayer(network, shape=[-1, seq_max_len, len(vocab)], name='unembed_reshape')
 
 k_top = tf.placeholder_with_default(1, shape=[], name='k_top')
 top_k_loglike, top_k_ind = tf.nn.top_k(tf.nn.log_softmax(network.outputs), k=k_top)
 loss_per_word = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=seq_truth, logits=network.outputs, name='cross_entropy')
+seq_mask = tf.sequence_mask(seq_len, max_step - 1, dtype=tf.float32)
 loss = tf.reduce_sum(loss_per_word * seq_mask)
 
 dropout_dict = {**network.all_drop, **init_net.all_drop}
@@ -132,7 +129,7 @@ def generate_seq(batch_img, k_beam=1):
     batch_size = batch_img.shape[0]
     first_dim = batch_size * k_beam
     batch_img_in = np.repeat(batch_img, k_beam, axis=0)
-    batch_seq_in = np.zeros((first_dim, max_step - 1), dtype=np.int64)
+    batch_seq_in = np.zeros((first_dim, 1), dtype=np.int64)
     batch_seq_len = np.ones((first_dim,), dtype=np.int64)
     batch_res = np.zeros((first_dim, max_step - 1), dtype=np.int64)
     batch_loglike_sum = np.zeros((first_dim,), dtype=np.float32)
@@ -201,16 +198,11 @@ shuffle_idx = np.random.permutation(n_train)
 for i_epoch in range(n_epoch):
     for i_batch in range(batch_per_epoch):
         batch_idx = shuffle_idx[i_batch * batch_size:(i_batch + 1) * batch_size]
-        batch_img = train_more_img[batch_idx, :]
+        batch_img = train_img[train_idx[batch_idx] - 1, :]
         batch_seq_in = train_seq[batch_idx, :-1]
         batch_seq_truth = train_seq[batch_idx, 1:]
         batch_seq_len = train_len[batch_idx] - 1
-        batch_seq_mask = np.zeros((batch_size, max_step - 1), dtype=np.float32)
-        for i, l in enumerate(batch_seq_len):
-            batch_seq_mask[i, :l] = 1
-        feed_dict = {img: batch_img, seq_in: batch_seq_in, seq_len: batch_seq_len,
-                     seq_mask: batch_seq_mask, seq_truth: batch_seq_truth, init_state_c: zero_state}
-        # feed_dict.update(tl.utils.dict_to_one(dropout_dict))
+        feed_dict = {img: batch_img, seq_in: batch_seq_in, seq_len: batch_seq_len, seq_truth: batch_seq_truth, init_state_c: zero_state}
         feed_dict.update(dropout_dict)
         _, batch_loss = sess.run([train_op, loss], feed_dict=feed_dict)
         accum_loss += batch_loss

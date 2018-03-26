@@ -2,10 +2,8 @@ from utils.load_data import *
 from utils.text_process import *
 from utils.metrics import *
 
-train_idx, train_sentences = load_text('./data/train.txt')
 val_idx, val_sentences = load_text('./data/valid.txt')
-train_seq, vocab, vocab_inv = encode_text(train_sentences)
-val_seq = encode_text(val_sentences, vocab, ignore_non_chinese=False, with_begin_end=False)
+val_seq, vocab, vocab_inv = encode_text(val_sentences, vocab=None, ignore_non_chinese=False, with_begin_end=False)
 val_test = {}
 val_dict = {}
 for idx, seq in zip(val_idx, val_seq):

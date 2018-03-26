@@ -30,7 +30,7 @@ class BLEUCounter(object):
         penalty = min(1, exp(1 - self.refs_len_sum / self.cand_len_sum))
         bleu_log = []
         for i in range(self.max_n):
-            bleu_log.append(log(self.den[i] / self.nom[i]))
+            bleu_log.append(log(self.den[i] / self.nom[i] + 1e-10))
         bleu_overall = []
         for i in range(self.max_n):
             bleu_overall.append(penalty * exp(sum(bleu_log[:i + 1]) / (i + 1)))
