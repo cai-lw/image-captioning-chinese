@@ -16,11 +16,11 @@ Implemented two RNN-based image captioning models from two corresponding papers:
 
 ## Dataset
 
-Images are from MS COCO. To save time from running huge CNNs, they are provided as feature vectors from a pre-trained CNN.
+Images are from MS COCO. To save time from running huge CNNs, they are provided as feature vectors from a pre-trained CNN. To prevent cheating (manual solving), only a small fraction of the original images are provided.
 
-Captions are labeled by students in the course.
+Captions are labeled by students in the course, so they may not be high-quality.
 
-The dataset is too large (>1GB) and not provided here. Contact me if you want the data.
+The dataset can be downloaded at [this Google Drive folder](https://drive.google.com/drive/u/1/folders/13EiOI11_Hg3S2vJDU5oRGa1kyT01h7KZ).
 
 ## Usage
 
