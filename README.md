@@ -20,7 +20,7 @@ Images are from MS COCO. To save time from running huge CNNs, they are provided 
 
 Captions are labeled by students in the course, so they may not be high-quality.
 
-The dataset can be downloaded at [this Google Drive folder](https://drive.google.com/drive/u/1/folders/13EiOI11_Hg3S2vJDU5oRGa1kyT01h7KZ).
+The dataset can be downloaded at [Google Drive](https://drive.google.com/drive/u/1/folders/13EiOI11_Hg3S2vJDU5oRGa1kyT01h7KZ) or [百度网盘](https://pan.baidu.com/s/1LDHc6Fx7VHR4zhkzdRRc7Q).
 
 ## Usage
 
